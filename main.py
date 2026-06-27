@@ -81,7 +81,6 @@ try:
     if 'records' not in st.session_state:
         st.session_state.records = store.load_records()
     else:
-        # 谨慎更新，避免空覆盖
         loaded = store.load_records()
         if loaded:
             st.session_state.records = loaded
@@ -175,7 +174,7 @@ with tab1:
     with col_left:
         st.subheader("图片准备")
 
-        # ----- 批量导入模块（兼容两种模式）-----
+        # ----- 批量导入模块 -----
         with st.expander("📂 批量导入图片（自动识别类型并保存到 images/）"):
             st.markdown("上传多张图片，程序将根据文件名自动匹配类型，您也可以手动调整。上传后自动保存到本地 images/ 和 GitHub 仓库 images/（需配置凭据）。")
             uploaded_files_batch = st.file_uploader(
@@ -357,16 +356,17 @@ with tab1:
                         parts = line.split(":")
                         if len(parts) >= 2: pred_level = parts[-1].strip()
 
-            st.subheader("📋 分析结果")
-            st.write("**AI 原始回复：**"); st.text(result_text)
+            # ---- 将分析结果存入 session_state ---- 
+            st.session_state.rain_prob = rain_prob
+            st.session_state.pred_level = pred_level
+            st.session_state.result_text = result_text
 
             correction = compute_correction(st.session_state.records)
             corrected_level = pred_level; bias = 0.0
             if pred_level and pred_level in REVERSE_LEVEL_MAP.values():
                 corrected_level, bias = apply_correction(pred_level, correction)
-            st.write(f"**降雨概率：** {rain_prob}")
-            st.write(f"**AI 预测等级：** {pred_level}")
-            st.write(f"**校正后等级：** {corrected_level} (偏差因子: {bias:.2f})")
+            st.session_state.corrected_level = corrected_level
+            st.session_state.bias = bias
 
             now = datetime.now()
             record = {
@@ -378,26 +378,37 @@ with tab1:
                 'raw_response': result_text, 'image_count': len(image_paths), 'actual_level': None
             }
             st.session_state.last_prediction = record
+            st.session_state.archive_path = archive_path if "本地模式" in mode else None
+            st.session_state.record_id = record['id']
+            st.session_state.text_saved = False  # 重置
 
-            # 添加记录（安全写入）
+            # 添加记录
             try:
                 store.add_record(record)
-                st.session_state.records = store.load_records()  # 重新加载以获取最新（如果成功）
+                st.session_state.records = store.load_records()
             except Exception as e:
-                # 如果写入失败，仍然在内存中保留记录
                 st.session_state.records.append(record)
                 st.warning(f"记录保存到外部存储时出现问题：{e}，但内存中已保留。")
 
-            st.success("本次分析已保存！")
             st.session_state.analysis_done = True
-            st.session_state.archive_path = archive_path if "本地模式" in mode else None
-            st.session_state.raw_text = result_text
-            st.session_state.record_id = record['id']
+
+            st.success("✅ 分析完成！请查看下方结果并保存反馈。")
+            st.rerun()  # 立即刷新以显示结果区域
+
+        # ========== 分析结果显示（独立于按钮块）==========
+        if st.session_state.get('analysis_done'):
+            st.write("**AI 原始回复：**")
+            st.text(st.session_state.result_text)
+
+            st.write(f"**降雨概率：** {st.session_state.rain_prob}")
+            st.write(f"**AI 预测等级：** {st.session_state.pred_level}")
+            st.write(f"**校正后等级：** {st.session_state.corrected_level} (偏差因子: {st.session_state.bias:.2f})")
 
             st.divider()
-            # ========== 一键保存（等级 + 文本）==========
             st.subheader("💾 保存本次分析")
+
             actual_level = st.selectbox("实际降雨等级", ["", "无雨","小雨","中雨","大雨","暴雨"], key="actual_select")
+
             if st.button("一键保存（等级 + 分析文本）"):
                 errs = []
 
@@ -405,13 +416,13 @@ with tab1:
                 if actual_level:
                     found = False
                     for r in st.session_state.records:
-                        if r['id'] == record['id']:
+                        if r['id'] == st.session_state.record_id:
                             r['actual_level'] = actual_level
                             found = True
                             break
                     if found:
                         try:
-                            store.save_records(st.session_state.records, f"Update actual level for {record['id']}")
+                            store.save_records(st.session_state.records, f"Update actual level for {st.session_state.record_id}")
                         except Exception as e:
                             errs.append(f"数据库保存失败: {e}")
                     else:
@@ -420,13 +431,13 @@ with tab1:
                     errs.append("未选择实际降雨等级")
 
                 # 2. 保存分析文本到本地存档
-                if st.session_state.get('analysis_done') and not st.session_state.get('text_saved', False):
+                if not st.session_state.get('text_saved'):
                     if "本地模式" in mode:
                         ap = st.session_state.archive_path
                         if ap and ap.exists():
                             try:
                                 with open(ap / f"analysis_{st.session_state.record_id}.txt", "w", encoding='utf-8') as f:
-                                    f.write(st.session_state.raw_text)
+                                    f.write(st.session_state.raw_text if hasattr(st.session_state, 'raw_text') else st.session_state.result_text)
                                 st.session_state.text_saved = True
                             except Exception as e:
                                 errs.append(f"文本保存失败: {e}")
