@@ -5,8 +5,8 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
 一键保存功能：同时保存实际降雨等级和分析文本。
 历史记录每条可单独删除（红色按钮在右侧），删除后自动同步 GitHub。
-新增“同步并归档到 GitHub”功能：将当前所有记录和 images 中的6张图片上传到
-仓库 history_records/<时间戳>/ 文件夹，上传成功后自动清理本地 images 图片。
+新增“同步并归档到 GitHub”功能：将当前所有记录和6张图片上传到
+仓库 history_records/<时间戳>/ 文件夹，上传成功后自动清理本地图片。
 """
 import streamlit as st
 from pathlib import Path
@@ -21,6 +21,7 @@ import pandas as pd
 from PIL import Image
 import io
 import re
+import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -99,6 +100,22 @@ def find_images_in_dir(directory: Path):
                 break
     return result
 
+def find_standard_images_multiple_sources():
+    """从 images/, input/, _uploads/ 中查找标准图片，返回 {name: Path} 字典"""
+    all_results = {}
+    sources = [
+        PROJECT_ROOT / "images",
+        config['images_local_dir'],
+        config['images_local_dir'] / "_uploads"
+    ]
+    for src_dir in sources:
+        if src_dir.exists():
+            found = find_images_in_dir(src_dir)
+            for name, path in found.items():
+                if name not in all_results:
+                    all_results[name] = path
+    return all_results
+
 def archive_images(source_dir: Path, archive_path: Path):
     archive_path.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -118,12 +135,15 @@ def archive_images(source_dir: Path, archive_path: Path):
     return count
 
 def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upload image"):
+    """上传文件到 GitHub 仓库，返回成功/失败"""
     if not github_api or not github_api.token:
         return False
-    existing = github_api.get_file_content(remote_path)
-    sha = existing['sha'] if existing else ''
+    try:
+        existing = github_api.get_file_content(remote_path)
+        sha = existing['sha'] if existing else ''
+    except Exception:
+        sha = ''
     b64_content = base64.b64encode(file_bytes).decode('utf-8')
-    import requests
     url = f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{remote_path}"
     headers = {
         "Authorization": f"token {github_api.token}",
@@ -132,8 +152,12 @@ def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upl
     payload = {"message": commit_msg, "content": b64_content}
     if sha:
         payload['sha'] = sha
-    resp = requests.put(url, headers=headers, json=payload)
-    return resp.status_code in (200, 201)
+    try:
+        resp = requests.put(url, headers=headers, json=payload)
+        return resp.status_code in (200, 201)
+    except Exception as e:
+        st.error(f"上传请求异常: {e}")
+        return False
 
 def auto_detect_type(filename: str) -> str:
     lower = filename.lower()
@@ -190,14 +214,17 @@ with tab1:
                         file_bytes = uf.getbuffer()
                         ext = Path(uf.name).suffix.lower()
                         target_name = f"{target_type}{ext}"
+                        # 保存到 input/
                         local_input = config['images_local_dir'] / target_name
                         local_input.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_input, "wb") as f:
                             f.write(file_bytes)
+                        # 保存到 images/
                         local_images = PROJECT_ROOT / "images" / target_name
                         local_images.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_images, "wb") as f:
                             f.write(file_bytes)
+                        # 上传到 GitHub images/
                         if github_api and github_api.token:
                             remote_path = f"images/{target_name}"
                             if not upload_to_github(file_bytes, remote_path, f"Upload {target_name}"):
@@ -434,10 +461,10 @@ with tab2:
                         st.warning(f"删除成功但同步失败: {e}")
                     st.rerun()
 
-        # ---------- 新增：同步并归档到 GitHub ----------
+        # ---------- 同步并归档到 GitHub（修复图片上传）----------
         st.markdown("---")
         st.subheader("📤 同步并归档到 GitHub")
-        st.markdown("将当前所有记录和本地 images/ 文件夹中的6张图片上传到仓库 `history_records/<时间戳>/` 文件夹，然后自动删除本地 images/ 中的图片。")
+        st.markdown("将当前所有记录和6张图片上传到仓库 `history_records/<时间戳>/` 文件夹，上传成功后自动清理本地图片。")
 
         if st.button("🚀 同步并归档（上传数据+图片 → 清理本地图片）"):
             if not github_api or not github_api.token:
@@ -446,6 +473,7 @@ with tab2:
                 timestamp_sync = datetime.now().strftime("%Y%m%d%H%M%S")
                 base_remote_path = f"history_records/{timestamp_sync}"
                 errors = []
+                success_msgs = []
 
                 # 1. 上传 JSON 记录
                 json_content = json.dumps(st.session_state.records, ensure_ascii=False, indent=2)
@@ -454,59 +482,78 @@ with tab2:
                     existing_json = github_api.get_file_content(json_remote)
                     sha_json = existing_json['sha'] if existing_json else ''
                     github_api.update_file(json_remote, json_content, sha_json, f"Archive records {timestamp_sync}")
-                    st.success(f"✅ 数据已上传: {json_remote}")
+                    success_msgs.append(f"✅ JSON 已上传")
                 except Exception as e:
                     errors.append(f"上传 JSON 失败: {e}")
 
-                # 2. 上传 6 张图片（从本地 images/ 文件夹）
-                local_images_dir = PROJECT_ROOT / "images"
-                uploaded_count = 0
-                for name in REQUIRED_NAMES:
-                    found = False
-                    for ext in ALLOWED_EXTENSIONS:
-                        img_path = local_images_dir / f"{name}{ext}"
-                        if img_path.exists():
-                            remote_img_path = f"{base_remote_path}/images/{name}{ext}"
-                            try:
-                                with open(img_path, "rb") as f:
-                                    img_bytes = f.read()
-                                if upload_to_github(img_bytes, remote_img_path, f"Upload {name}{ext}"):
-                                    uploaded_count += 1
-                                    found = True
-                                else:
-                                    errors.append(f"上传 {name}{ext} 失败")
-                            except Exception as e:
-                                errors.append(f"上传 {name}{ext} 异常: {e}")
-                            break
-                    if not found:
-                        errors.append(f"本地未找到图片: {name}（请先通过批量导入或手动放置）")
-
-                # 3. 如果全部上传成功，则删除本地 images/ 中的图片
-                if uploaded_count == 6:
-                    deleted_count = 0
-                    for name in REQUIRED_NAMES:
-                        for ext in ALLOWED_EXTENSIONS:
-                            img_path = local_images_dir / f"{name}{ext}"
-                            if img_path.exists():
-                                try:
-                                    img_path.unlink()
-                                    deleted_count += 1
-                                    break
-                                except Exception as e:
-                                    errors.append(f"删除本地图片 {name}{ext} 失败: {e}")
-                    # 清理 _uploads 中的临时文件
-                    uploads_dir = config['images_local_dir'] / "_uploads"
-                    if uploads_dir.exists():
-                        for f in uploads_dir.iterdir():
-                            try: f.unlink()
-                            except: pass
-                    st.success(f"✅ 已成功归档 {timestamp_sync}，并已清理本地 {deleted_count} 张图片。")
+                # 2. 查找所有标准图片（从多个目录）
+                image_dict = find_standard_images_multiple_sources()
+                if len(image_dict) < 6:
+                    missing_names = [n for n in REQUIRED_NAMES if n not in image_dict]
+                    errors.append(f"仅找到 {len(image_dict)}/6 张图片，缺少: {', '.join(missing_names)}。请先通过批量导入或手动放置。")
                 else:
-                    st.warning(f"图片上传不完整（{uploaded_count}/6），因此未删除本地图片。")
+                    uploaded_count = 0
+                    for name in REQUIRED_NAMES:
+                        if name not in image_dict:
+                            errors.append(f"本地未找到图片: {name}")
+                            continue
+                        img_path = image_dict[name]
+                        remote_img_path = f"{base_remote_path}/images/{img_path.name}"
+                        try:
+                            with open(img_path, "rb") as f:
+                                img_bytes = f.read()
+                            if upload_to_github(img_bytes, remote_img_path, f"Upload {img_path.name}"):
+                                uploaded_count += 1
+                                success_msgs.append(f"✅ {img_path.name} 已上传")
+                            else:
+                                errors.append(f"上传 {img_path.name} 失败（GitHub API 返回错误）")
+                        except Exception as e:
+                            errors.append(f"上传 {img_path.name} 异常: {e}")
 
+                    # 3. 如果全部上传成功，则删除本地图片
+                    if uploaded_count == 6:
+                        deleted_count = 0
+                        # 删除 images/ 中的标准图片
+                        images_dir = PROJECT_ROOT / "images"
+                        for name in REQUIRED_NAMES:
+                            for ext in ALLOWED_EXTENSIONS:
+                                p = images_dir / f"{name}{ext}"
+                                if p.exists():
+                                    try:
+                                        p.unlink()
+                                        deleted_count += 1
+                                        break
+                                    except Exception as e:
+                                        errors.append(f"删除 {p.name} 失败: {e}")
+                        # 删除 _uploads 中的临时文件
+                        uploads_dir = config['images_local_dir'] / "_uploads"
+                        if uploads_dir.exists():
+                            for f in uploads_dir.iterdir():
+                                try:
+                                    f.unlink()
+                                except:
+                                    pass
+                        # 可选：删除 input/ 中的标准图片
+                        input_dir = config['images_local_dir']
+                        for name in REQUIRED_NAMES:
+                            for ext in ALLOWED_EXTENSIONS:
+                                p = input_dir / f"{name}{ext}"
+                                if p.exists():
+                                    try:
+                                        p.unlink()
+                                        break
+                                    except:
+                                        pass
+                        success_msgs.append(f"✅ 已清理本地 {deleted_count} 张图片。")
+                    else:
+                        errors.append(f"图片上传不完整（{uploaded_count}/6），未删除本地图片。")
+
+                # 显示结果
+                for msg in success_msgs:
+                    st.success(msg)
                 if errors:
                     st.error("部分操作异常：\n" + "\n".join(errors))
-                else:
+                if not errors:
                     st.success("🎉 全部操作完成！")
                 st.rerun()
 
