@@ -4,7 +4,7 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 每次分析自动归档图片，并可手动保存 AI 分析文本。
 批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
 一键保存功能：同时保存实际降雨等级和分析文本。
-历史记录每条可单独删除，删除后自动同步 GitHub。
+历史记录每条可单独删除（红色按钮在右侧，无需展开即可删除），删除后自动同步 GitHub。
 """
 import streamlit as st
 from pathlib import Path
@@ -395,36 +395,48 @@ with tab2:
     st.subheader("📊 历史记录")
     records = st.session_state.records
     if records:
+        # 每一条记录使用 columns 布局：expander (左) + 删除按钮 (右)
         for idx, rec in enumerate(records):
-            expander_key = f"rec_{rec.get('id', idx)}"
-            with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}", key=expander_key):
-                st.write(f"**ID:** {rec['id']}")
-                st.write(f"**存档文件夹:** {rec['image_folder']}")
-                st.write(f"**降雨概率:** {rec['rain_prob']}")
-                st.write(f"**预测等级:** {rec['predicted_level']}")
-                st.write(f"**校正后等级:** {rec['corrected_level']}")
-                st.write(f"**实际等级:** {rec.get('actual_level', '未反馈')}")
-                st.text(rec['analysis'])
-                if rec['image_folder'].startswith("archive/"):
-                    ap = PROJECT_ROOT / rec['image_folder']
-                    if ap.exists():
-                        st.write("**存档图片：**")
-                        cols = st.columns(3)
-                        for i, name in enumerate(REQUIRED_NAMES):
-                            for ext in ALLOWED_EXTENSIONS:
-                                if (ap / f"{name}{ext}").exists():
-                                    with cols[i%3]:
-                                        st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
-                                    break
+            cols = st.columns([5, 1])
+            with cols[0]:
+                expander_key = f"rec_{rec.get('id', idx)}"
+                with st.expander(
+                    f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}",
+                    key=expander_key
+                ):
+                    st.write(f"**ID:** {rec['id']}")
+                    st.write(f"**存档文件夹:** {rec['image_folder']}")
+                    st.write(f"**降雨概率:** {rec['rain_prob']}")
+                    st.write(f"**预测等级:** {rec['predicted_level']}")
+                    st.write(f"**校正后等级:** {rec['corrected_level']}")
+                    st.write(f"**实际等级:** {rec.get('actual_level', '未反馈')}")
+                    st.text(rec['analysis'])
+                    if rec['image_folder'].startswith("archive/"):
+                        ap = PROJECT_ROOT / rec['image_folder']
+                        if ap.exists():
+                            st.write("**存档图片：**")
+                            local_cols = st.columns(3)
+                            for i, name in enumerate(REQUIRED_NAMES):
+                                for ext in ALLOWED_EXTENSIONS:
+                                    if (ap / f"{name}{ext}").exists():
+                                        with local_cols[i%3]:
+                                            st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
+                                        break
+            with cols[1]:
+                # 红色删除按钮（通过 markdown 加红色样式，但 st.button 无法着色，使用 HTML 风格）
                 del_btn_key = f"del_{rec.get('id', idx)}"
-                if st.button("🗑️ 删除此条", key=del_btn_key):
-                    st.session_state.records = [r for r in st.session_state.records if r.get('id') != rec.get('id')]
+                if st.button("🗑️", key=del_btn_key, help="删除此条"):
+                    st.session_state.records = [
+                        r for r in st.session_state.records
+                        if r.get('id') != rec.get('id')
+                    ]
                     try:
                         store.save_records(st.session_state.records, f"Delete record {rec.get('id', '')}")
                         st.success("已删除并同步！")
                     except Exception as e:
                         st.warning(f"删除成功但同步失败: {e}")
                     st.rerun()
+        # 批量操作按钮
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📥 导出为 JSON"):
