@@ -37,13 +37,10 @@ st.sidebar.header("⚙️ 设置")
 
 model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
 
-# --- 运行模式选择（必须保留） ---
+# --- 运行模式选择（修复：去掉不存在的 index 参数） ---
 mode = st.sidebar.radio(
     "运行模式",
-    ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"],
-    index=1 if st.runtime.exists() and st.runtime.is_remote() else 0
-    # 云端部署时默认选择云端模式，本地运行时默认本地模式
-    # 简单起见，始终让用户手动选择
+    ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"]
 )
 
 st.sidebar.markdown("---")
@@ -273,7 +270,6 @@ with tab1:
             # 云端模式也提供上传功能
             uploaded_files = st.file_uploader("上传图片（当仓库无图片时使用）", type=['png','jpg','jpeg'], accept_multiple_files=True, key="cloud_upload")
             if uploaded_files:
-                # 保存到临时目录
                 temp_dir = config['images_local_dir'] / "_uploads"
                 temp_dir.mkdir(parents=True, exist_ok=True)
                 for uf in uploaded_files:
