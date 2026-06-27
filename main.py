@@ -4,6 +4,7 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 每次分析自动归档图片，并可手动保存 AI 分析文本。
 批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
 一键保存功能：同时保存实际降雨等级和分析文本。
+历史记录每条可单独删除，删除后自动同步 GitHub。
 """
 import streamlit as st
 from pathlib import Path
@@ -35,38 +36,22 @@ ARCHIVE_DIR.mkdir(exist_ok=True)
 
 # ========== 侧边栏配置 ==========
 st.sidebar.header("⚙️ 设置")
-
 model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
-
 mode = st.sidebar.radio("运行模式",
-    ["云端模式 (读取仓库 images/ 文件夹)", "本地模式 (读取本地 input/ 文件夹)"],
-    index=0)
-
+    ["云端模式 (读取仓库 images/ 文件夹)", "本地模式 (读取本地 input/ 文件夹)"], index=0)
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🔑 GitHub 凭据**")
-
-api_key_input = st.sidebar.text_input(
-    "GitHub Token", type="password", value=config.get('token', ''),
-    help="在 https://github.com/settings/tokens 生成（需repo和models权限）"
-)
-owner_input = st.sidebar.text_input(
-    "仓库所有者 (Owner)", value=config.get('owner', ''),
-    help="你的 GitHub 用户名"
-)
-repo_input = st.sidebar.text_input(
-    "仓库名称 (Repo)", value=config.get('repo', ''),
-    help="例如 image_weather_analysis"
-)
-
+api_key_input = st.sidebar.text_input("GitHub Token", type="password", value=config.get('token', ''),
+    help="在 https://github.com/settings/tokens 生成（需repo和models权限）")
+owner_input = st.sidebar.text_input("仓库所有者 (Owner)", value=config.get('owner', ''), help="你的 GitHub 用户名")
+repo_input = st.sidebar.text_input("仓库名称 (Repo)", value=config.get('repo', ''), help="例如 image_weather_analysis")
 config['token'] = api_key_input
 config['owner'] = owner_input
 config['repo'] = repo_input
-
 missing = []
 if not config['token']: missing.append("GitHub Token")
 if not config['owner']: missing.append("仓库所有者")
 if not config['repo']: missing.append("仓库名称")
-
 if missing:
     st.sidebar.info(f"📝 请在下方输入框中填写：{', '.join(missing)}。\n\n也可在项目根目录的 `.env` 文件中预设。")
     github_api = None
@@ -75,8 +60,6 @@ else:
     github_api = GitHubAPI(config['token'], config['owner'], config['repo'])
 
 store = DataStore(config, github_api)
-
-# 加载记录，异常保护
 try:
     if 'records' not in st.session_state:
         st.session_state.records = store.load_records()
@@ -88,7 +71,6 @@ except Exception:
     if 'records' not in st.session_state:
         st.session_state.records = []
 
-# ========== 侧边栏图片名称提示 ==========
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📷 需要的6张图片（文件名必须完全匹配）：**")
 for key in ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1", "model_mix_2"]:
@@ -96,7 +78,6 @@ for key in ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1",
 if "云端模式" in mode:
     st.sidebar.info("✅ 请确保仓库根目录下的 `images/` 文件夹包含上述6张图片。\n上传的图片会自动同步到仓库。")
 
-# ========== 常量和辅助函数 ==========
 REQUIRED_NAMES = ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1", "model_mix_2"]
 REQUIRED_DISPLAY = {
     "radar": "雷达回波图", "wind_600m": "600米低空风速图", "wind_3000m": "3000米高空风速图",
@@ -134,7 +115,6 @@ def archive_images(source_dir: Path, archive_path: Path):
     return count
 
 def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upload image"):
-    """上传文件到 GitHub 仓库，自动处理 base64 编码"""
     if not github_api or not github_api.token:
         return False
     existing = github_api.get_file_content(remote_path)
@@ -163,7 +143,6 @@ def auto_detect_type(filename: str) -> str:
     if 'model' in lower: return 'model_mix_1'
     return 'unknown'
 
-# ========== 主界面 ==========
 st.title("🌧️ 普吉岛天气预报图像分析")
 st.markdown("上传或选择6张标准气象图，让 AI 分析降雨情况并记录校正。")
 
@@ -173,14 +152,9 @@ with tab1:
     col_left, col_right = st.columns([1, 1.5])
     with col_left:
         st.subheader("图片准备")
-
-        # ----- 批量导入模块 -----
         with st.expander("📂 批量导入图片（自动识别类型并保存到 images/）"):
             st.markdown("上传多张图片，程序将根据文件名自动匹配类型，您也可以手动调整。上传后自动保存到本地 images/ 和 GitHub 仓库 images/（需配置凭据）。")
-            uploaded_files_batch = st.file_uploader(
-                "选择图片文件（可多选）", type=['png','jpg','jpeg'],
-                accept_multiple_files=True, key="batch_uploader"
-            )
+            uploaded_files_batch = st.file_uploader("选择图片文件（可多选）", type=['png','jpg','jpeg'], accept_multiple_files=True, key="batch_uploader")
             if uploaded_files_batch:
                 if 'batch_mapping' not in st.session_state:
                     st.session_state.batch_mapping = {}
@@ -213,34 +187,25 @@ with tab1:
                         file_bytes = uf.getbuffer()
                         ext = Path(uf.name).suffix.lower()
                         target_name = f"{target_type}{ext}"
-
-                        # 保存到本地 input/
                         local_input = config['images_local_dir'] / target_name
                         local_input.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_input, "wb") as f:
                             f.write(file_bytes)
-
-                        # 保存到本地 images/
                         local_images = PROJECT_ROOT / "images" / target_name
                         local_images.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_images, "wb") as f:
                             f.write(file_bytes)
-
-                        # 上传到 GitHub 仓库 images/
                         if github_api and github_api.token:
                             remote_path = f"images/{target_name}"
                             uploaded = upload_to_github(file_bytes, remote_path, f"Upload {target_name}")
                             if not uploaded:
                                 error_files.append(f"{uf.name} (GitHub上传失败)")
-
                         success_count += 1
                     if error_files:
                         st.warning(f"以下文件有问题：{', '.join(error_files)}")
                     st.success(f"成功导入 {success_count} 张图片到本地和 GitHub images/ 文件夹！")
                     st.session_state.batch_mapping = {}
                     st.rerun()
-
-        # ----- 根据模式显示图片来源 -----
         if "云端模式" in mode:
             st.info("📂 从仓库 `images/` 文件夹读取图片。下方将显示仓库中的图片。")
             if github_api:
@@ -264,7 +229,7 @@ with tab1:
                     st.warning("仓库 images/ 文件夹为空或缺少标准命名的图片，请使用批量导入上传图片。")
             else:
                 st.warning("未配置 GitHub 凭据，无法读取仓库图片。")
-        else:  # 本地模式
+        else:
             local_dir = config['images_local_dir']
             local_dir.mkdir(parents=True, exist_ok=True)
             image_dict = find_images_in_dir(local_dir)
@@ -277,7 +242,6 @@ with tab1:
                     st.warning(f"缺少: {', '.join(missing)}")
             else:
                 st.info("input 文件夹为空，请使用批量导入上传图片。")
-
         extra = st.text_area("额外说明（可选）", placeholder="例如：分析明天下午3点的降雨情况")
 
     with col_right:
@@ -286,8 +250,6 @@ with tab1:
             timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
             archive_path = ARCHIVE_DIR / timestamp_str
             image_paths = []
-
-            # 优先使用上传的文件（data URL）
             uploaded = st.session_state.get('batch_uploader', [])
             if uploaded and len(uploaded) > 0:
                 for uf in uploaded:
@@ -297,7 +259,6 @@ with tab1:
                         ext = Path(uf.name).suffix.lower()
                         mime = "image/png" if ext == '.png' else "image/jpeg"
                         image_paths.append(f"data:{mime};base64,{b64}")
-                # 归档上传文件
                 uploads_dir = config['images_local_dir'] / "_uploads"
                 uploads_dir.mkdir(parents=True, exist_ok=True)
                 for uf in uploaded:
@@ -316,7 +277,7 @@ with tab1:
                     if not image_paths:
                         st.error("仓库 images/ 中没有找到图片，请先将6张标准图片推送到仓库，或使用批量导入功能。")
                         st.stop()
-                else:  # 本地模式
+                else:
                     image_dict = find_images_in_dir(config['images_local_dir'])
                     if not image_dict:
                         st.error("没有找到任何图片，请先将图片放入 input/ 文件夹或使用批量导入功能。")
@@ -326,15 +287,12 @@ with tab1:
                         st.error("缺少部分图片（需要6张标准图），请补齐。")
                         st.stop()
                     archive_images(config['images_local_dir'], archive_path)
-
             with st.spinner("正在调用 AI 分析，请稍候..."):
                 try:
                     result_text = analyze_images(api_key=config['token'], model=model_name, image_paths=image_paths, extra_context=extra)
                 except Exception as e:
                     st.error(f"分析调用失败：{e}")
                     st.stop()
-
-            # 解析结果
             rain_prob, pred_level = "", ""
             lines = result_text.strip().split('\n')
             conclusion_line = None
@@ -355,19 +313,15 @@ with tab1:
                     elif "预测等级" in line and line != conclusion_line:
                         parts = line.split(":")
                         if len(parts) >= 2: pred_level = parts[-1].strip()
-
-            # ---- 将分析结果存入 session_state ---- 
             st.session_state.rain_prob = rain_prob
             st.session_state.pred_level = pred_level
             st.session_state.result_text = result_text
-
             correction = compute_correction(st.session_state.records)
             corrected_level = pred_level; bias = 0.0
             if pred_level and pred_level in REVERSE_LEVEL_MAP.values():
                 corrected_level, bias = apply_correction(pred_level, correction)
             st.session_state.corrected_level = corrected_level
             st.session_state.bias = bias
-
             now = datetime.now()
             record = {
                 'id': now.strftime("%Y%m%d%H%M%S"),
@@ -380,39 +334,27 @@ with tab1:
             st.session_state.last_prediction = record
             st.session_state.archive_path = archive_path if "本地模式" in mode else None
             st.session_state.record_id = record['id']
-            st.session_state.text_saved = False  # 重置
-
-            # 添加记录
+            st.session_state.text_saved = False
             try:
                 store.add_record(record)
                 st.session_state.records = store.load_records()
             except Exception as e:
                 st.session_state.records.append(record)
                 st.warning(f"记录保存到外部存储时出现问题：{e}，但内存中已保留。")
-
             st.session_state.analysis_done = True
-
             st.success("✅ 分析完成！请查看下方结果并保存反馈。")
-            st.rerun()  # 立即刷新以显示结果区域
-
-        # ========== 分析结果显示（独立于按钮块）==========
+            st.rerun()
         if st.session_state.get('analysis_done'):
             st.write("**AI 原始回复：**")
             st.text(st.session_state.result_text)
-
             st.write(f"**降雨概率：** {st.session_state.rain_prob}")
             st.write(f"**AI 预测等级：** {st.session_state.pred_level}")
             st.write(f"**校正后等级：** {st.session_state.corrected_level} (偏差因子: {st.session_state.bias:.2f})")
-
             st.divider()
             st.subheader("💾 保存本次分析")
-
             actual_level = st.selectbox("实际降雨等级", ["", "无雨","小雨","中雨","大雨","暴雨"], key="actual_select")
-
             if st.button("一键保存（等级 + 分析文本）"):
                 errs = []
-
-                # 1. 保存实际降雨等级
                 if actual_level:
                     found = False
                     for r in st.session_state.records:
@@ -429,15 +371,13 @@ with tab1:
                         errs.append("未找到当前记录")
                 else:
                     errs.append("未选择实际降雨等级")
-
-                # 2. 保存分析文本到本地存档
                 if not st.session_state.get('text_saved'):
                     if "本地模式" in mode:
                         ap = st.session_state.archive_path
                         if ap and ap.exists():
                             try:
                                 with open(ap / f"analysis_{st.session_state.record_id}.txt", "w", encoding='utf-8') as f:
-                                    f.write(st.session_state.raw_text if hasattr(st.session_state, 'raw_text') else st.session_state.result_text)
+                                    f.write(st.session_state.result_text)
                                 st.session_state.text_saved = True
                             except Exception as e:
                                 errs.append(f"文本保存失败: {e}")
@@ -445,7 +385,6 @@ with tab1:
                             errs.append("存档文件夹不存在")
                     else:
                         st.info("云端模式无法保存文本到本地，请手动复制")
-
                 if errs:
                     st.error("部分操作未完成：\n" + "\n".join(errs))
                 else:
@@ -456,8 +395,9 @@ with tab2:
     st.subheader("📊 历史记录")
     records = st.session_state.records
     if records:
-        for rec in records:
-            with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}"):
+        for idx, rec in enumerate(records):
+            expander_key = f"rec_{rec.get('id', idx)}"
+            with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}", key=expander_key):
                 st.write(f"**ID:** {rec['id']}")
                 st.write(f"**存档文件夹:** {rec['image_folder']}")
                 st.write(f"**降雨概率:** {rec['rain_prob']}")
@@ -473,8 +413,18 @@ with tab2:
                         for i, name in enumerate(REQUIRED_NAMES):
                             for ext in ALLOWED_EXTENSIONS:
                                 if (ap / f"{name}{ext}").exists():
-                                    with cols[i%3]: st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
+                                    with cols[i%3]:
+                                        st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
                                     break
+                del_btn_key = f"del_{rec.get('id', idx)}"
+                if st.button("🗑️ 删除此条", key=del_btn_key):
+                    st.session_state.records = [r for r in st.session_state.records if r.get('id') != rec.get('id')]
+                    try:
+                        store.save_records(st.session_state.records, f"Delete record {rec.get('id', '')}")
+                        st.success("已删除并同步！")
+                    except Exception as e:
+                        st.warning(f"删除成功但同步失败: {e}")
+                    st.rerun()
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📥 导出为 JSON"):
@@ -493,4 +443,5 @@ with tab3:
     corr = compute_correction(st.session_state.records)
     st.write(f"当前整体偏差校正因子: **{corr.get('overall_bias',0):.3f}**")
     st.markdown("偏差 = (预测-实际)/预测，校正后等级 = 预测数值×(1-偏差因子)")
-    if st.button("🔄 重新计算"): st.rerun()
+    if st.button("🔄 重新计算"):
+        st.rerun()
