@@ -242,7 +242,8 @@ with tab1:
                     st.warning(f"缺少: {', '.join(missing)}")
             else:
                 st.info("input 文件夹为空，请使用批量导入上传图片。")
-        extra = st.text_area("额外说明（可选）", placeholder="例如：分析明天下午3点的降雨情况")
+        # ========== 修改点：标签改为“分析时间” ==========
+        extra = st.text_area("分析时间（例如：明天下午3点）", placeholder="输入你想要预测的具体时间，AI将据此分析降雨")
 
     with col_right:
         st.subheader("🤖 AI 分析")
@@ -395,7 +396,6 @@ with tab2:
     st.subheader("📊 历史记录")
     records = st.session_state.records
     if records:
-        # 每一条记录使用 columns 布局：expander (左) + 删除按钮 (右)
         for idx, rec in enumerate(records):
             cols = st.columns([5, 1])
             with cols[0]:
@@ -423,20 +423,15 @@ with tab2:
                                             st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
                                         break
             with cols[1]:
-                # 红色删除按钮（通过 markdown 加红色样式，但 st.button 无法着色，使用 HTML 风格）
                 del_btn_key = f"del_{rec.get('id', idx)}"
                 if st.button("🗑️", key=del_btn_key, help="删除此条"):
-                    st.session_state.records = [
-                        r for r in st.session_state.records
-                        if r.get('id') != rec.get('id')
-                    ]
+                    st.session_state.records = [r for r in st.session_state.records if r.get('id') != rec.get('id')]
                     try:
                         store.save_records(st.session_state.records, f"Delete record {rec.get('id', '')}")
                         st.success("已删除并同步！")
                     except Exception as e:
                         st.warning(f"删除成功但同步失败: {e}")
                     st.rerun()
-        # 批量操作按钮
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📥 导出为 JSON"):
