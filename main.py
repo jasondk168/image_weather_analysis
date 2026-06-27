@@ -2,9 +2,8 @@
 Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Cloud）。
 包含三个标签页：分析、历史记录、校正管理。
 每次分析自动归档图片，并可手动保存 AI 分析文本。
-新增批量导入功能：从不同文件夹选取多张图片，自动匹配类型并复制到 input/ 和 images/。
-侧边栏显示必需6张图片名称，并支持完整 GitHub 凭据输入。
-上传的图片会自动保存到 images/ 文件夹（云端模式下同步到 GitHub 仓库）。
+批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
+一键保存功能：同时保存实际降雨等级和分析文本。
 """
 import streamlit as st
 from pathlib import Path
@@ -39,7 +38,6 @@ st.sidebar.header("⚙️ 设置")
 
 model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
 
-# 默认选中“云端模式”，手机端无需手动切换
 mode = st.sidebar.radio("运行模式",
     ["云端模式 (读取仓库 images/ 文件夹)", "本地模式 (读取本地 input/ 文件夹)"],
     index=0)
@@ -77,10 +75,19 @@ else:
     github_api = GitHubAPI(config['token'], config['owner'], config['repo'])
 
 store = DataStore(config, github_api)
-if 'records' not in st.session_state:
-    st.session_state.records = store.load_records()
-else:
-    st.session_state.records = store.load_records()
+
+# 加载记录，异常保护
+try:
+    if 'records' not in st.session_state:
+        st.session_state.records = store.load_records()
+    else:
+        # 谨慎更新，避免空覆盖
+        loaded = store.load_records()
+        if loaded:
+            st.session_state.records = loaded
+except Exception:
+    if 'records' not in st.session_state:
+        st.session_state.records = []
 
 # ========== 侧边栏图片名称提示 ==========
 st.sidebar.markdown("---")
@@ -127,75 +134,22 @@ def archive_images(source_dir: Path, archive_path: Path):
                 count += 1
     return count
 
-def save_image_to_local_and_remote(file_bytes: bytes, filename: str, target_type: str):
-    """将上传的文件保存到本地 input/、images/ 以及云端仓库 images/"""
-    ext = Path(filename).suffix.lower()
-    target_name = f"{target_type}{ext}"
-
-    # 保存到本地 input/
-    input_path = config['images_local_dir'] / target_name
-    with open(input_path, "wb") as f:
-        f.write(file_bytes)
-
-    # 保存到本地 images/
-    local_images_dir = PROJECT_ROOT / "images"
-    local_images_dir.mkdir(parents=True, exist_ok=True)
-    local_image_path = local_images_dir / target_name
-    with open(local_image_path, "wb") as f:
-        f.write(file_bytes)
-
-    # 同步到 GitHub 仓库 images/（如果已配置）
-    if github_api and github_api.token:
-        remote_path = f"images/{target_name}"
-        # 检查文件是否已存在，获取 sha
-        existing = github_api.get_file_content(remote_path)
-        sha = existing['sha'] if existing else ''
-        # 上传文件
-        success = github_api.update_file(
-            remote_path,
-            base64.b64encode(file_bytes).decode('utf-8'),
-            sha,
-            f"Upload {target_name}"
-        )
-        # 注意：GitHub API update_file 需要 base64 编码的文件内容，但 update_file 方法内部会再次编码，所以需要传递原始 base64 字符串？
-        # 查看 github_api.py 中 update_file 实现：它接受 content 字符串并再次 base64 编码。
-        # 所以我们需要先 base64 编码文件内容，再作为 content 传入。
-        # 但是上面已经 base64 编码了一次，update_file 内部又会编码一次，导致双重编码。
-        # 因此我们需要修改方法，或者直接传递原始文件字节？
-        # 为了简洁，我们修改 save_image_to_local_and_remote 函数，直接调用 update_file 并自行编码一次：
-        # 重新实现：
-        pass  # 下面会重新实现
-
-# 重新实现：避免双重 base64 编码
-def save_image_to_github(file_bytes: bytes, target_type: str):
-    """通过 GitHub API 将图片上传到仓库 images/ 文件夹"""
-    if not github_api or not github_api.token:
-        return False
-    ext = '.png'  # 默认扩展名，实际上我们需要知道原始扩展名
-    # 由于函数参数未包含扩展名，我们将在调用时传递完整文件名
-    # 为了避免混乱，下面将 upload_to_github 单独实现
-
 def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upload image"):
     """上传文件到 GitHub 仓库，自动处理 base64 编码"""
     if not github_api or not github_api.token:
         return False
-    # 获取现有文件 sha（如果存在）
     existing = github_api.get_file_content(remote_path)
     sha = existing['sha'] if existing else ''
-    # 构建 payload：content 应为 base64 编码的字符串
     b64_content = base64.b64encode(file_bytes).decode('utf-8')
-    payload = {
-        "message": commit_msg,
-        "content": b64_content
-    }
-    if sha:
-        payload['sha'] = sha
     import requests
     url = f"https://api.github.com/repos/{config['owner']}/{config['repo']}/contents/{remote_path}"
     headers = {
         "Authorization": f"token {github_api.token}",
         "Accept": "application/vnd.github.v3+json"
     }
+    payload = {"message": commit_msg, "content": b64_content}
+    if sha:
+        payload['sha'] = sha
     resp = requests.put(url, headers=headers, json=payload)
     return resp.status_code in (200, 201)
 
@@ -273,7 +227,7 @@ with tab1:
                         with open(local_images, "wb") as f:
                             f.write(file_bytes)
 
-                        # 上传到 GitHub 仓库 images/（如果已配置）
+                        # 上传到 GitHub 仓库 images/
                         if github_api and github_api.token:
                             remote_path = f"images/{target_name}"
                             uploaded = upload_to_github(file_bytes, remote_path, f"Upload {target_name}")
@@ -344,7 +298,7 @@ with tab1:
                         ext = Path(uf.name).suffix.lower()
                         mime = "image/png" if ext == '.png' else "image/jpeg"
                         image_paths.append(f"data:{mime};base64,{b64}")
-                # 归档上传文件（本地）
+                # 归档上传文件
                 uploads_dir = config['images_local_dir'] / "_uploads"
                 uploads_dir.mkdir(parents=True, exist_ok=True)
                 for uf in uploaded:
@@ -353,7 +307,6 @@ with tab1:
                             f.write(uf.getbuffer())
                 archive_images(config['images_local_dir'], archive_path)
             else:
-                # 无上传文件，根据模式决定来源
                 if "云端模式" in mode:
                     if github_api:
                         dir_contents = github_api.list_dir(config['images_remote_dir'])
@@ -425,43 +378,68 @@ with tab1:
                 'raw_response': result_text, 'image_count': len(image_paths), 'actual_level': None
             }
             st.session_state.last_prediction = record
-            store.add_record(record)
-            st.session_state.records = store.load_records()
-            st.success("本次分析已自动归档并保存！")
+
+            # 添加记录（安全写入）
+            try:
+                store.add_record(record)
+                st.session_state.records = store.load_records()  # 重新加载以获取最新（如果成功）
+            except Exception as e:
+                # 如果写入失败，仍然在内存中保留记录
+                st.session_state.records.append(record)
+                st.warning(f"记录保存到外部存储时出现问题：{e}，但内存中已保留。")
+
+            st.success("本次分析已保存！")
             st.session_state.analysis_done = True
             st.session_state.archive_path = archive_path if "本地模式" in mode else None
             st.session_state.raw_text = result_text
             st.session_state.record_id = record['id']
 
             st.divider()
-            st.subheader("📝 实际降雨反馈")
+            # ========== 一键保存（等级 + 文本）==========
+            st.subheader("💾 保存本次分析")
             actual_level = st.selectbox("实际降雨等级", ["", "无雨","小雨","中雨","大雨","暴雨"], key="actual_select")
-            if st.button("保存反馈"):
+            if st.button("一键保存（等级 + 分析文本）"):
+                errs = []
+
+                # 1. 保存实际降雨等级
                 if actual_level:
+                    found = False
                     for r in st.session_state.records:
                         if r['id'] == record['id']:
-                            r['actual_level'] = actual_level; break
-                    store.save_records(st.session_state.records, f"Update actual level for {record['id']}")
-                    st.session_state.records = store.load_records()
-                    st.success("反馈已保存！"); st.rerun()
-                else:
-                    st.warning("请选择实际降雨等级")
-
-        # 保存分析结果按钮
-        if st.session_state.get('analysis_done') and not st.session_state.get('text_saved', False):
-            if st.button("💾 保存分析结果"):
-                if "本地模式" in mode:
-                    ap = st.session_state.archive_path
-                    if ap and ap.exists():
-                        with open(ap / f"analysis_{st.session_state.record_id}.txt", "w", encoding='utf-8') as f:
-                            f.write(st.session_state.raw_text)
-                        st.success(f"已保存"); st.session_state.text_saved = True; st.rerun()
+                            r['actual_level'] = actual_level
+                            found = True
+                            break
+                    if found:
+                        try:
+                            store.save_records(st.session_state.records, f"Update actual level for {record['id']}")
+                        except Exception as e:
+                            errs.append(f"数据库保存失败: {e}")
                     else:
-                        st.error("存档文件夹不存在。")
+                        errs.append("未找到当前记录")
                 else:
-                    st.info("云端模式无法保存文本到本地，请手动复制。")
-        if st.session_state.get('text_saved'):
-            st.info("✅ 分析结果已保存到存档文件夹。")
+                    errs.append("未选择实际降雨等级")
+
+                # 2. 保存分析文本到本地存档
+                if st.session_state.get('analysis_done') and not st.session_state.get('text_saved', False):
+                    if "本地模式" in mode:
+                        ap = st.session_state.archive_path
+                        if ap and ap.exists():
+                            try:
+                                with open(ap / f"analysis_{st.session_state.record_id}.txt", "w", encoding='utf-8') as f:
+                                    f.write(st.session_state.raw_text)
+                                st.session_state.text_saved = True
+                            except Exception as e:
+                                errs.append(f"文本保存失败: {e}")
+                        else:
+                            errs.append("存档文件夹不存在")
+                    else:
+                        st.info("云端模式无法保存文本到本地，请手动复制")
+
+                if errs:
+                    st.error("部分操作未完成：\n" + "\n".join(errs))
+                else:
+                    st.success("✅ 本次分析已完整保存（等级 + 文本）！")
+                    st.rerun()
 
 with tab2:
     st.subheader("📊 历史记录")
@@ -469,9 +447,13 @@ with tab2:
     if records:
         for rec in records:
             with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}"):
-                st.write(f"**ID:** {rec['id']}"); st.write(f"**存档文件夹:** {rec['image_folder']}")
-                st.write(f"**降雨概率:** {rec['rain_prob']}"); st.write(f"**预测等级:** {rec['predicted_level']}")
-                st.write(f"**校正后等级:** {rec['corrected_level']}"); st.text(rec['analysis'])
+                st.write(f"**ID:** {rec['id']}")
+                st.write(f"**存档文件夹:** {rec['image_folder']}")
+                st.write(f"**降雨概率:** {rec['rain_prob']}")
+                st.write(f"**预测等级:** {rec['predicted_level']}")
+                st.write(f"**校正后等级:** {rec['corrected_level']}")
+                st.write(f"**实际等级:** {rec.get('actual_level', '未反馈')}")
+                st.text(rec['analysis'])
                 if rec['image_folder'].startswith("archive/"):
                     ap = PROJECT_ROOT / rec['image_folder']
                     if ap.exists():
@@ -482,12 +464,16 @@ with tab2:
                                 if (ap / f"{name}{ext}").exists():
                                     with cols[i%3]: st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
                                     break
-        if st.button("📥 导出为 JSON"):
-            store.export_to_json(config['data_file_local'])
-            with open(config['data_file_local'], 'rb') as f:
-                st.download_button("点击下载", f, "analysis_records.json")
-        if st.button("🔄 同步到 GitHub"):
-            store.save_records(st.session_state.records, "Manual sync"); st.success("已同步")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📥 导出为 JSON"):
+                store.export_to_json(config['data_file_local'])
+                with open(config['data_file_local'], 'rb') as f:
+                    st.download_button("点击下载", f, "analysis_records.json")
+        with col2:
+            if st.button("🔄 同步到 GitHub"):
+                store.save_records(st.session_state.records, "Manual sync")
+                st.success("已同步到 GitHub 仓库！")
     else:
         st.info("暂无历史记录。")
 
