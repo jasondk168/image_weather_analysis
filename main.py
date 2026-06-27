@@ -4,7 +4,9 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 每次分析自动归档图片，并可手动保存 AI 分析文本。
 批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
 一键保存功能：同时保存实际降雨等级和分析文本。
-历史记录每条可单独删除（红色按钮在右侧，无需展开即可删除），删除后自动同步 GitHub。
+历史记录每条可单独删除（红色按钮在右侧），删除后自动同步 GitHub。
+新增“同步并归档到 GitHub”功能：将当前所有记录和 images 中的6张图片上传到
+仓库 history_records/<时间戳>/ 文件夹，上传成功后自动清理本地 images 图片。
 """
 import streamlit as st
 from pathlib import Path
@@ -12,6 +14,7 @@ import sys
 import os
 import shutil
 import base64
+import json
 from datetime import datetime
 import plotly.express as px
 import pandas as pd
@@ -197,8 +200,7 @@ with tab1:
                             f.write(file_bytes)
                         if github_api and github_api.token:
                             remote_path = f"images/{target_name}"
-                            uploaded = upload_to_github(file_bytes, remote_path, f"Upload {target_name}")
-                            if not uploaded:
+                            if not upload_to_github(file_bytes, remote_path, f"Upload {target_name}"):
                                 error_files.append(f"{uf.name} (GitHub上传失败)")
                         success_count += 1
                     if error_files:
@@ -242,7 +244,6 @@ with tab1:
                     st.warning(f"缺少: {', '.join(missing)}")
             else:
                 st.info("input 文件夹为空，请使用批量导入上传图片。")
-        # ========== 修改点：标签改为“分析时间” ==========
         extra = st.text_area("分析时间（例如：明天下午3点）", placeholder="输入你想要预测的具体时间，AI将据此分析降雨")
 
     with col_right:
@@ -432,16 +433,98 @@ with tab2:
                     except Exception as e:
                         st.warning(f"删除成功但同步失败: {e}")
                     st.rerun()
-        col1, col2 = st.columns(2)
+
+        # ---------- 新增：同步并归档到 GitHub ----------
+        st.markdown("---")
+        st.subheader("📤 同步并归档到 GitHub")
+        st.markdown("将当前所有记录和本地 images/ 文件夹中的6张图片上传到仓库 `history_records/<时间戳>/` 文件夹，然后自动删除本地 images/ 中的图片。")
+
+        if st.button("🚀 同步并归档（上传数据+图片 → 清理本地图片）"):
+            if not github_api or not github_api.token:
+                st.error("请先在侧边栏配置 GitHub 凭据。")
+            else:
+                timestamp_sync = datetime.now().strftime("%Y%m%d%H%M%S")
+                base_remote_path = f"history_records/{timestamp_sync}"
+                errors = []
+
+                # 1. 上传 JSON 记录
+                json_content = json.dumps(st.session_state.records, ensure_ascii=False, indent=2)
+                json_remote = f"{base_remote_path}/analysis_records.json"
+                try:
+                    existing_json = github_api.get_file_content(json_remote)
+                    sha_json = existing_json['sha'] if existing_json else ''
+                    github_api.update_file(json_remote, json_content, sha_json, f"Archive records {timestamp_sync}")
+                    st.success(f"✅ 数据已上传: {json_remote}")
+                except Exception as e:
+                    errors.append(f"上传 JSON 失败: {e}")
+
+                # 2. 上传 6 张图片（从本地 images/ 文件夹）
+                local_images_dir = PROJECT_ROOT / "images"
+                uploaded_count = 0
+                for name in REQUIRED_NAMES:
+                    found = False
+                    for ext in ALLOWED_EXTENSIONS:
+                        img_path = local_images_dir / f"{name}{ext}"
+                        if img_path.exists():
+                            remote_img_path = f"{base_remote_path}/images/{name}{ext}"
+                            try:
+                                with open(img_path, "rb") as f:
+                                    img_bytes = f.read()
+                                if upload_to_github(img_bytes, remote_img_path, f"Upload {name}{ext}"):
+                                    uploaded_count += 1
+                                    found = True
+                                else:
+                                    errors.append(f"上传 {name}{ext} 失败")
+                            except Exception as e:
+                                errors.append(f"上传 {name}{ext} 异常: {e}")
+                            break
+                    if not found:
+                        errors.append(f"本地未找到图片: {name}（请先通过批量导入或手动放置）")
+
+                # 3. 如果全部上传成功，则删除本地 images/ 中的图片
+                if uploaded_count == 6:
+                    deleted_count = 0
+                    for name in REQUIRED_NAMES:
+                        for ext in ALLOWED_EXTENSIONS:
+                            img_path = local_images_dir / f"{name}{ext}"
+                            if img_path.exists():
+                                try:
+                                    img_path.unlink()
+                                    deleted_count += 1
+                                    break
+                                except Exception as e:
+                                    errors.append(f"删除本地图片 {name}{ext} 失败: {e}")
+                    # 清理 _uploads 中的临时文件
+                    uploads_dir = config['images_local_dir'] / "_uploads"
+                    if uploads_dir.exists():
+                        for f in uploads_dir.iterdir():
+                            try: f.unlink()
+                            except: pass
+                    st.success(f"✅ 已成功归档 {timestamp_sync}，并已清理本地 {deleted_count} 张图片。")
+                else:
+                    st.warning(f"图片上传不完整（{uploaded_count}/6），因此未删除本地图片。")
+
+                if errors:
+                    st.error("部分操作异常：\n" + "\n".join(errors))
+                else:
+                    st.success("🎉 全部操作完成！")
+                st.rerun()
+
+        # ---------- 原有批量操作按钮 ----------
+        col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("📥 导出为 JSON"):
                 store.export_to_json(config['data_file_local'])
                 with open(config['data_file_local'], 'rb') as f:
                     st.download_button("点击下载", f, "analysis_records.json")
         with col2:
-            if st.button("🔄 同步到 GitHub"):
+            if st.button("🔄 同步到 GitHub (仅数据)"):
                 store.save_records(st.session_state.records, "Manual sync")
                 st.success("已同步到 GitHub 仓库！")
+        with col3:
+            if st.button("🔄 重新加载记录"):
+                st.session_state.records = store.load_records()
+                st.rerun()
     else:
         st.info("暂无历史记录。")
 
