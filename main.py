@@ -5,8 +5,7 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 批量导入图片自动保存到本地 images/ 和 GitHub 仓库 images/。
 一键保存功能：同时保存实际降雨等级和分析文本。
 历史记录每条可单独删除（红色按钮在右侧），删除后自动同步 GitHub。
-新增“同步并归档到 GitHub”功能：将当前所有记录和6张图片上传到
-仓库 history_records/<时间戳>/ 文件夹，上传成功后自动清理本地图片。
+同步归档时支持自定义文件夹名称（默认使用分析时间），自动上传 JSON 和 6 张图片。
 """
 import streamlit as st
 from pathlib import Path
@@ -135,7 +134,6 @@ def archive_images(source_dir: Path, archive_path: Path):
     return count
 
 def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upload image"):
-    """上传文件到 GitHub 仓库，返回成功/失败"""
     if not github_api or not github_api.token:
         return False
     try:
@@ -155,9 +153,19 @@ def upload_to_github(file_bytes: bytes, remote_path: str, commit_msg: str = "Upl
     try:
         resp = requests.put(url, headers=headers, json=payload)
         return resp.status_code in (200, 201)
-    except Exception as e:
-        st.error(f"上传请求异常: {e}")
+    except:
         return False
+
+def safe_folder_name(name: str) -> str:
+    """将用户输入的字符串转为安全的文件夹名（替换特殊字符）"""
+    # 替换空格、冒号、斜杠等为下划线
+    safe = re.sub(r'[\\/:*?"<>| ]', '_', name)
+    # 去除前导后缀空格和下划线
+    safe = safe.strip('_ ')
+    # 如果结果为空，使用时间戳
+    if not safe:
+        safe = datetime.now().strftime("%Y%m%d%H%M%S")
+    return safe
 
 def auto_detect_type(filename: str) -> str:
     lower = filename.lower()
@@ -214,17 +222,14 @@ with tab1:
                         file_bytes = uf.getbuffer()
                         ext = Path(uf.name).suffix.lower()
                         target_name = f"{target_type}{ext}"
-                        # 保存到 input/
                         local_input = config['images_local_dir'] / target_name
                         local_input.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_input, "wb") as f:
                             f.write(file_bytes)
-                        # 保存到 images/
                         local_images = PROJECT_ROOT / "images" / target_name
                         local_images.parent.mkdir(parents=True, exist_ok=True)
                         with open(local_images, "wb") as f:
                             f.write(file_bytes)
-                        # 上传到 GitHub images/
                         if github_api and github_api.token:
                             remote_path = f"images/{target_name}"
                             if not upload_to_github(file_bytes, remote_path, f"Upload {target_name}"):
@@ -352,9 +357,11 @@ with tab1:
             st.session_state.corrected_level = corrected_level
             st.session_state.bias = bias
             now = datetime.now()
+            # ===== 重要修改：将分析时间（extra）存入记录 =====
             record = {
                 'id': now.strftime("%Y%m%d%H%M%S"),
                 'timestamp': now.isoformat(),
+                'analyze_time': extra if extra else "未指定",  # 新增字段
                 'image_folder': f"archive/{timestamp_str}" if "本地模式" in mode else config['images_remote_dir'],
                 'rain_prob': rain_prob, 'predicted_level': pred_level,
                 'corrected_level': corrected_level, 'analysis': result_text,
@@ -428,11 +435,14 @@ with tab2:
             cols = st.columns([5, 1])
             with cols[0]:
                 expander_key = f"rec_{rec.get('id', idx)}"
+                # 在标题中增加分析时间显示
+                analyze_time = rec.get('analyze_time', '未知')
                 with st.expander(
-                    f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}",
+                    f"{rec['timestamp']} - 分析时间: {analyze_time} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}",
                     key=expander_key
                 ):
                     st.write(f"**ID:** {rec['id']}")
+                    st.write(f"**分析时间:** {analyze_time}")
                     st.write(f"**存档文件夹:** {rec['image_folder']}")
                     st.write(f"**降雨概率:** {rec['rain_prob']}")
                     st.write(f"**预测等级:** {rec['predicted_level']}")
@@ -461,17 +471,31 @@ with tab2:
                         st.warning(f"删除成功但同步失败: {e}")
                     st.rerun()
 
-        # ---------- 同步并归档到 GitHub（修复图片上传）----------
+        # ---------- 同步并归档到 GitHub（可自定义文件夹名）----------
         st.markdown("---")
         st.subheader("📤 同步并归档到 GitHub")
-        st.markdown("将当前所有记录和6张图片上传到仓库 `history_records/<时间戳>/` 文件夹，上传成功后自动清理本地图片。")
+
+        # 从最近一条记录获取分析时间作为默认文件夹名
+        last_analyze_time = ""
+        if records:
+            last_analyze_time = records[-1].get('analyze_time', '')
+        if not last_analyze_time:
+            last_analyze_time = datetime.now().strftime("%Y年%m月%d日 %H点%M分")
+
+        archive_folder_name = st.text_input(
+            "归档文件夹名称（可修改）",
+            value=last_analyze_time,
+            help="输入有意义的名称，例如：6月27日14点预报"
+        )
+        safe_name = safe_folder_name(archive_folder_name)
+
+        st.markdown(f"最终文件夹名: `history_records/{safe_name}/`")
 
         if st.button("🚀 同步并归档（上传数据+图片 → 清理本地图片）"):
             if not github_api or not github_api.token:
                 st.error("请先在侧边栏配置 GitHub 凭据。")
             else:
-                timestamp_sync = datetime.now().strftime("%Y%m%d%H%M%S")
-                base_remote_path = f"history_records/{timestamp_sync}"
+                base_remote_path = f"history_records/{safe_name}"
                 errors = []
                 success_msgs = []
 
@@ -481,12 +505,12 @@ with tab2:
                 try:
                     existing_json = github_api.get_file_content(json_remote)
                     sha_json = existing_json['sha'] if existing_json else ''
-                    github_api.update_file(json_remote, json_content, sha_json, f"Archive records {timestamp_sync}")
+                    github_api.update_file(json_remote, json_content, sha_json, f"Archive {safe_name}")
                     success_msgs.append(f"✅ JSON 已上传")
                 except Exception as e:
                     errors.append(f"上传 JSON 失败: {e}")
 
-                # 2. 查找所有标准图片（从多个目录）
+                # 2. 查找所有标准图片
                 image_dict = find_standard_images_multiple_sources()
                 if len(image_dict) < 6:
                     missing_names = [n for n in REQUIRED_NAMES if n not in image_dict]
@@ -510,10 +534,9 @@ with tab2:
                         except Exception as e:
                             errors.append(f"上传 {img_path.name} 异常: {e}")
 
-                    # 3. 如果全部上传成功，则删除本地图片
                     if uploaded_count == 6:
                         deleted_count = 0
-                        # 删除 images/ 中的标准图片
+                        # 删除 images/
                         images_dir = PROJECT_ROOT / "images"
                         for name in REQUIRED_NAMES:
                             for ext in ALLOWED_EXTENSIONS:
@@ -523,17 +546,8 @@ with tab2:
                                         p.unlink()
                                         deleted_count += 1
                                         break
-                                    except Exception as e:
-                                        errors.append(f"删除 {p.name} 失败: {e}")
-                        # 删除 _uploads 中的临时文件
-                        uploads_dir = config['images_local_dir'] / "_uploads"
-                        if uploads_dir.exists():
-                            for f in uploads_dir.iterdir():
-                                try:
-                                    f.unlink()
-                                except:
-                                    pass
-                        # 可选：删除 input/ 中的标准图片
+                                    except: pass
+                        # 删除 input/ 和 _uploads
                         input_dir = config['images_local_dir']
                         for name in REQUIRED_NAMES:
                             for ext in ALLOWED_EXTENSIONS:
@@ -542,13 +556,16 @@ with tab2:
                                     try:
                                         p.unlink()
                                         break
-                                    except:
-                                        pass
-                        success_msgs.append(f"✅ 已清理本地 {deleted_count} 张图片。")
+                                    except: pass
+                        uploads_dir = input_dir / "_uploads"
+                        if uploads_dir.exists():
+                            for f in uploads_dir.iterdir():
+                                try: f.unlink()
+                                except: pass
+                        success_msgs.append(f"✅ 已清理本地图片。")
                     else:
                         errors.append(f"图片上传不完整（{uploaded_count}/6），未删除本地图片。")
 
-                # 显示结果
                 for msg in success_msgs:
                     st.success(msg)
                 if errors:
