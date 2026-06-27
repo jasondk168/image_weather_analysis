@@ -3,7 +3,7 @@ Streamlit 主程序。同时适配本地（便携版）和云端（Streamlit Clo
 包含三个标签页：分析、历史记录、校正管理。
 每次分析自动归档图片，并可手动保存 AI 分析文本。
 新增批量导入功能：从不同文件夹选取多张图片，自动匹配类型并复制到 input/。
-侧边栏显示必需的6张图片名称。
+侧边栏显示必需6张图片名称，并支持完整 GitHub 凭据输入。
 """
 import streamlit as st
 from pathlib import Path
@@ -32,26 +32,67 @@ config = load_config()
 ARCHIVE_DIR = PROJECT_ROOT / "archive"
 ARCHIVE_DIR.mkdir(exist_ok=True)
 
-github_api = None
-if config['token'] and config['owner'] and config['repo']:
-    github_api = GitHubAPI(config['token'], config['owner'], config['repo'])
-    st.sidebar.success("✅ GitHub API 已连接")
-else:
-    st.sidebar.warning("⚠️ 请配置 GitHub 凭据（.env 或 Secrets）")
+# ========== 侧边栏配置 ==========
+st.sidebar.header("⚙️ 设置")
 
+model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🔑 GitHub 凭据**")
+
+# 三个输入框
+api_key_input = st.sidebar.text_input(
+    "GitHub Token",
+    type="password",
+    value=config.get('token', ''),
+    help="在 https://github.com/settings/tokens 生成（需repo和models权限）"
+)
+owner_input = st.sidebar.text_input(
+    "仓库所有者 (Owner)",
+    value=config.get('owner', ''),
+    help="你的 GitHub 用户名"
+)
+repo_input = st.sidebar.text_input(
+    "仓库名称 (Repo)",
+    value=config.get('repo', ''),
+    help="例如 image_weather_analysis"
+)
+
+# 用输入框的值覆盖config
+config['token'] = api_key_input
+config['owner'] = owner_input
+config['repo'] = repo_input
+
+# 凭据检查
+missing = []
+if not config['token']:
+    missing.append("GitHub Token")
+if not config['owner']:
+    missing.append("仓库所有者")
+if not config['repo']:
+    missing.append("仓库名称")
+
+if missing:
+    st.sidebar.info(
+        f"📝 请在下方输入框中填写：{', '.join(missing)}。\n\n"
+        "也可在项目根目录的 `.env` 文件中预设。"
+    )
+    github_api = None
+else:
+    st.sidebar.success("✅ GitHub 凭据已配置")
+    github_api = GitHubAPI(config['token'], config['owner'], config['repo'])
+
+# ########## 初始化数据存储和记录 ##########
 store = DataStore(config, github_api)
 
 if 'records' not in st.session_state:
     st.session_state.records = store.load_records()
+else:
+    # 当凭据变化时，重新加载记录（简单方式：每次重新加载）
+    # 为了提升性能，可缓存，但当前简单处理
+    st.session_state.records = store.load_records()
 
-st.sidebar.header("⚙️ 设置")
-model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
-api_key_input = st.sidebar.text_input("GitHub Token", type="password", value=config.get('token', ''))
-if api_key_input:
-    config['token'] = api_key_input
-mode = st.sidebar.radio("运行模式", ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"])
-
-# ===== 在侧边栏显示必需的图片名称 =====
+# ========== 侧边栏图片名称提示 ==========
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📷 需要的6张图片（文件名必须完全匹配）：**")
 required_display_info = {
@@ -64,8 +105,8 @@ required_display_info = {
 }
 for key, desc in required_display_info.items():
     st.sidebar.text(f"- {key}.png/.jpg/.jpeg")
-# ========================================
 
+# ========== 常量和辅助函数 ==========
 REQUIRED_NAMES = ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1", "model_mix_2"]
 REQUIRED_DISPLAY = {
     "radar": "雷达回波图",
@@ -108,7 +149,6 @@ def archive_images(source_dir: Path, archive_path: Path):
     return count
 
 def auto_detect_type(filename: str) -> str:
-    """根据文件名猜测图片类型"""
     lower = filename.lower()
     if 'radar' in lower: return 'radar'
     if '600' in lower or 'low' in lower: return 'wind_600m'
@@ -120,6 +160,7 @@ def auto_detect_type(filename: str) -> str:
         return 'model_mix_1'
     return 'unknown'
 
+# ========== 主界面 ==========
 st.title("🌧️ 普吉岛天气预报图像分析")
 st.markdown("上传或选择6张标准气象图，让 AI 分析降雨情况并记录校正。")
 
@@ -130,7 +171,7 @@ with tab1:
     with col_left:
         st.subheader("图片准备")
 
-        # ===== 批量导入模块 =====
+        # 批量导入模块
         with st.expander("📂 批量导入图片（从不同文件夹选取）"):
             st.markdown("上传多张图片，程序将根据文件名自动匹配类型，您也可以手动调整。")
             uploaded_files_batch = st.file_uploader(
@@ -187,7 +228,9 @@ with tab1:
                     st.session_state.batch_mapping = {}
                     st.rerun()
 
-        # ===== 原有 input 文件夹显示 =====
+        # 原有 input 文件夹显示
+        mode = st.session_state.get('mode', '本地模式 (读取本地文件夹)')
+
         if mode == "本地模式 (读取本地文件夹)":
             local_dir = config['images_local_dir']
             local_dir.mkdir(parents=True, exist_ok=True)
