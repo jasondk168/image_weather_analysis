@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import os
 import shutil
+import base64
 from datetime import datetime
 import plotly.express as px
 import pandas as pd
@@ -37,29 +38,21 @@ st.sidebar.header("⚙️ 设置")
 
 model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
 
-# --- 运行模式选择（修复：去掉不存在的 index 参数） ---
-mode = st.sidebar.radio(
-    "运行模式",
-    ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"]
-)
+mode = st.sidebar.radio("运行模式", ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"])
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🔑 GitHub 凭据**")
 
 api_key_input = st.sidebar.text_input(
-    "GitHub Token",
-    type="password",
-    value=config.get('token', ''),
+    "GitHub Token", type="password", value=config.get('token', ''),
     help="在 https://github.com/settings/tokens 生成（需repo和models权限）"
 )
 owner_input = st.sidebar.text_input(
-    "仓库所有者 (Owner)",
-    value=config.get('owner', ''),
+    "仓库所有者 (Owner)", value=config.get('owner', ''),
     help="你的 GitHub 用户名"
 )
 repo_input = st.sidebar.text_input(
-    "仓库名称 (Repo)",
-    value=config.get('repo', ''),
+    "仓库名称 (Repo)", value=config.get('repo', ''),
     help="例如 image_weather_analysis"
 )
 
@@ -68,26 +61,18 @@ config['owner'] = owner_input
 config['repo'] = repo_input
 
 missing = []
-if not config['token']:
-    missing.append("GitHub Token")
-if not config['owner']:
-    missing.append("仓库所有者")
-if not config['repo']:
-    missing.append("仓库名称")
+if not config['token']: missing.append("GitHub Token")
+if not config['owner']: missing.append("仓库所有者")
+if not config['repo']: missing.append("仓库名称")
 
 if missing:
-    st.sidebar.info(
-        f"📝 请在下方输入框中填写：{', '.join(missing)}。\n\n"
-        "也可在项目根目录的 `.env` 文件中预设。"
-    )
+    st.sidebar.info(f"📝 请在下方输入框中填写：{', '.join(missing)}。\n\n也可在项目根目录的 `.env` 文件中预设。")
     github_api = None
 else:
     st.sidebar.success("✅ GitHub 凭据已配置")
     github_api = GitHubAPI(config['token'], config['owner'], config['repo'])
 
-# ########## 初始化数据存储和记录 ##########
 store = DataStore(config, github_api)
-
 if 'records' not in st.session_state:
     st.session_state.records = store.load_records()
 else:
@@ -96,33 +81,20 @@ else:
 # ========== 侧边栏图片名称提示 ==========
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📷 需要的6张图片（文件名必须完全匹配）：**")
-required_display_info = {
-    "radar": "雷达回波图",
-    "wind_600m": "600米低空风速图",
-    "wind_3000m": "3000米高空风速图",
-    "wind_direction": "风向图",
-    "model_mix_1": "混合模型预报图①",
-    "model_mix_2": "混合模型预报图②"
-}
-for key, desc in required_display_info.items():
+for key in ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1", "model_mix_2"]:
     st.sidebar.text(f"- {key}.png/.jpg/.jpeg")
 
 # ========== 常量和辅助函数 ==========
 REQUIRED_NAMES = ["radar", "wind_600m", "wind_3000m", "wind_direction", "model_mix_1", "model_mix_2"]
 REQUIRED_DISPLAY = {
-    "radar": "雷达回波图",
-    "wind_600m": "600米低空风速图",
-    "wind_3000m": "3000米高空风速图",
-    "wind_direction": "风向图",
-    "model_mix_1": "混合模型预报图1",
-    "model_mix_2": "混合模型预报图2"
+    "radar": "雷达回波图", "wind_600m": "600米低空风速图", "wind_3000m": "3000米高空风速图",
+    "wind_direction": "风向图", "model_mix_1": "混合模型预报图1", "model_mix_2": "混合模型预报图2"
 }
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
 
 def find_images_in_dir(directory: Path):
     result = {}
-    if not directory.exists():
-        return result
+    if not directory.exists(): return result
     for name in REQUIRED_NAMES:
         for ext in ALLOWED_EXTENSIONS:
             f = directory / f"{name}{ext}"
@@ -157,8 +129,7 @@ def auto_detect_type(filename: str) -> str:
     if 'direction' in lower: return 'wind_direction'
     if 'mix1' in lower or 'model1' in lower: return 'model_mix_1'
     if 'mix2' in lower or 'model2' in lower: return 'model_mix_2'
-    if 'model' in lower:
-        return 'model_mix_1'
+    if 'model' in lower: return 'model_mix_1'
     return 'unknown'
 
 # ========== 主界面 ==========
@@ -176,37 +147,30 @@ with tab1:
         with st.expander("📂 批量导入图片（从不同文件夹选取）"):
             st.markdown("上传多张图片，程序将根据文件名自动匹配类型，您也可以手动调整。")
             uploaded_files_batch = st.file_uploader(
-                "选择图片文件（可多选）",
-                type=['png', 'jpg', 'jpeg'],
-                accept_multiple_files=True,
-                key="batch_uploader"
+                "选择图片文件（可多选）", type=['png','jpg','jpeg'],
+                accept_multiple_files=True, key="batch_uploader"
             )
             if uploaded_files_batch:
                 if 'batch_mapping' not in st.session_state:
                     st.session_state.batch_mapping = {}
                 for uf in uploaded_files_batch:
                     if uf.name not in st.session_state.batch_mapping:
-                        detected = auto_detect_type(uf.name)
-                        st.session_state.batch_mapping[uf.name] = detected
+                        st.session_state.batch_mapping[uf.name] = auto_detect_type(uf.name)
                 st.write("**文件类型映射（请确认或修改）：**")
                 new_mapping = {}
                 for uf in uploaded_files_batch:
                     cols = st.columns([2, 2])
-                    with cols[0]:
-                        st.write(uf.name)
+                    with cols[0]: st.write(uf.name)
                     with cols[1]:
                         current_type = st.session_state.batch_mapping.get(uf.name, 'unknown')
-                        type_options = ['unknown'] + REQUIRED_NAMES
                         selected = st.selectbox(
-                            f"选择类型 - {uf.name}",
-                            options=type_options,
-                            index=type_options.index(current_type) if current_type in type_options else 0,
-                            key=f"map_{uf.name}",
-                            label_visibility="collapsed"
+                            f"类型 - {uf.name}",
+                            options=['unknown'] + REQUIRED_NAMES,
+                            index=0 if current_type not in ['unknown']+REQUIRED_NAMES else (['unknown']+REQUIRED_NAMES).index(current_type),
+                            key=f"map_{uf.name}", label_visibility="collapsed"
                         )
                         new_mapping[uf.name] = selected
                 st.session_state.batch_mapping = new_mapping
-
                 if st.button("✅ 确认导入到 input 文件夹"):
                     local_dir = config['images_local_dir']
                     local_dir.mkdir(parents=True, exist_ok=True)
@@ -214,46 +178,41 @@ with tab1:
                     error_files = []
                     for uf in uploaded_files_batch:
                         target_type = st.session_state.batch_mapping.get(uf.name, 'unknown')
-                        if target_type == 'unknown' or target_type not in REQUIRED_NAMES:
-                            error_files.append(f"{uf.name} (类型未指定或无效)")
+                        if target_type not in REQUIRED_NAMES:
+                            error_files.append(f"{uf.name} (类型无效)")
                             continue
-                        ext = Path(uf.name).suffix.lower()
-                        target_filename = f"{target_type}{ext}"
-                        target_path = local_dir / target_filename
+                        target_path = local_dir / f"{target_type}{Path(uf.name).suffix}"
                         with open(target_path, "wb") as f:
                             f.write(uf.getbuffer())
                         import_count += 1
                     if error_files:
-                        st.warning(f"以下文件未导入：{', '.join(error_files)}")
+                        st.warning(f"未导入: {', '.join(error_files)}")
                     st.success(f"成功导入 {import_count} 张图片到 input/ 文件夹！")
                     st.session_state.batch_mapping = {}
                     st.rerun()
 
-        # 显示当前 input/ 内容或云端仓库图片
+        # 显示当前图片 + 上传控件
         if mode == "本地模式 (读取本地文件夹)":
             local_dir = config['images_local_dir']
             local_dir.mkdir(parents=True, exist_ok=True)
             image_dict = find_images_in_dir(local_dir)
             if image_dict:
-                st.success(f"当前 input 文件夹中有 {len(image_dict)} 张图片")
+                st.success(f"input 文件夹中有 {len(image_dict)} 张图片")
                 for name, path in image_dict.items():
                     st.image(str(path), width=100, caption=REQUIRED_DISPLAY.get(name, name))
-                missing = [REQUIRED_DISPLAY.get(n, n) for n in REQUIRED_NAMES if n not in image_dict]
+                missing = [REQUIRED_DISPLAY[n] for n in REQUIRED_NAMES if n not in image_dict]
                 if missing:
                     st.warning(f"缺少: {', '.join(missing)}")
             else:
-                st.info("input 文件夹为空，请通过上面的批量导入放入图片，或手动复制文件到 input 文件夹。")
-            uploaded_files = st.file_uploader("或直接上传单张图片（补充/替换）", type=['png','jpg','jpeg'], accept_multiple_files=True, key="quick_upload")
+                st.info("input 文件夹为空，请使用批量导入或下方上传。")
+            uploaded_files = st.file_uploader(
+                "上传图片（支持多选）", type=['png','jpg','jpeg'],
+                accept_multiple_files=True, key="quick_upload"
+            )
             if uploaded_files:
-                temp_dir = local_dir / "_uploads"
-                temp_dir.mkdir(exist_ok=True)
-                for uf in uploaded_files:
-                    path = temp_dir / uf.name
-                    with open(path, "wb") as f:
-                        f.write(uf.getbuffer())
-                st.success(f"已上传 {len(uploaded_files)} 张临时图片")
+                st.success(f"已选择 {len(uploaded_files)} 张图片，点击开始分析即可使用。")
         else:  # 云端模式
-            st.info("云端模式将从仓库 images/ 文件夹读取图片，或使用下方上传的图片。")
+            st.info("云端模式：可直接上传图片，或从仓库 images/ 读取。")
             if github_api:
                 dir_contents = github_api.list_dir(config['images_remote_dir'])
                 image_items = [item for item in dir_contents if item['type'] == 'file' and any(
@@ -264,19 +223,15 @@ with tab1:
                         raw_url = f"https://raw.githubusercontent.com/{config['owner']}/{config['repo']}/main/{config['images_remote_dir']}{item['name']}"
                         st.image(raw_url, width=100, caption=item['name'])
                 else:
-                    st.warning("仓库 images/ 文件夹为空或不存在，请通过上传方式提供图片。")
+                    st.warning("仓库 images/ 为空，请上传图片。")
             else:
-                st.error("需要配置 GitHub 凭据才能读取仓库图片，但您仍可以通过上传方式提供图片。")
-            # 云端模式也提供上传功能
-            uploaded_files = st.file_uploader("上传图片（当仓库无图片时使用）", type=['png','jpg','jpeg'], accept_multiple_files=True, key="cloud_upload")
+                st.info("未配置GitHub凭据，请使用下方的上传功能。")
+            uploaded_files = st.file_uploader(
+                "上传图片", type=['png','jpg','jpeg'],
+                accept_multiple_files=True, key="cloud_upload"
+            )
             if uploaded_files:
-                temp_dir = config['images_local_dir'] / "_uploads"
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                for uf in uploaded_files:
-                    path = temp_dir / uf.name
-                    with open(path, "wb") as f:
-                        f.write(uf.getbuffer())
-                st.success(f"已上传 {len(uploaded_files)} 张临时图片")
+                st.success(f"已选择 {len(uploaded_files)} 张图片，点击开始分析即可使用。")
 
         extra = st.text_area("额外说明（可选）", placeholder="例如：分析明天下午3点的降雨情况")
 
@@ -287,40 +242,69 @@ with tab1:
             archive_path = ARCHIVE_DIR / timestamp_str
             image_paths = []
 
-            # 关键修改：优先检查本地临时上传的文件（_uploads）
-            temp_dir = config['images_local_dir'] / "_uploads"
-            if temp_dir.exists() and any(temp_dir.iterdir()):
-                # 使用上传的临时文件
-                image_paths = sorted(temp_dir.glob("*.*"))
-                # 同时归档
-                if mode == "本地模式 (读取本地文件夹)":
-                    archive_images(config['images_local_dir'], archive_path)
-            else:
-                # 没有上传文件，根据模式决定来源
-                if mode == "本地模式 (读取本地文件夹)":
+            # ===== 核心修复：优先使用 session_state 中的上传文件（内存 data URL）=====
+            # 获取当前模式下的上传文件
+            if mode == "本地模式 (读取本地文件夹)":
+                uploaded = st.session_state.get('quick_upload', [])
+                if not uploaded or len(uploaded) == 0:
+                    # 尝试从 input 文件夹读取标准命名文件
                     image_dict = find_images_in_dir(config['images_local_dir'])
                     if not image_dict:
-                        st.error("没有找到任何图片，请先将图片放入 input/ 文件夹或使用批量导入/上传")
+                        st.error("没有找到任何图片，请先上传或放入input/文件夹。")
                         st.stop()
                     image_paths = [image_dict[name] for name in REQUIRED_NAMES if name in image_dict]
                     if len(image_paths) < 6:
-                        st.error("缺少部分图片（需要6张标准图），请补齐")
+                        st.error("缺少部分标准命名图片（需要6张），请补齐或使用上传功能。")
                         st.stop()
+                    # 本地模式归档图片
                     archive_images(config['images_local_dir'], archive_path)
-                else:  # 云端模式
+                else:
+                    # 使用上传的文件，转为data URL
+                    for uf in uploaded:
+                        if uf is not None:
+                            img_bytes = uf.getbuffer()
+                            b64 = base64.b64encode(img_bytes).decode('utf-8')
+                            ext = Path(uf.name).suffix.lower()
+                            mime = "image/png" if ext == '.png' else "image/jpeg"
+                            image_paths.append(f"data:{mime};base64,{b64}")
+                    if not image_paths:
+                        st.error("上传的图片为空，请重新上传。")
+                        st.stop()
+                    # 归档（将上传文件保存到archive供历史查看，但云端可能无法保存）
+                    uploads_dir = config['images_local_dir'] / "_uploads"
+                    uploads_dir.mkdir(parents=True, exist_ok=True)
+                    for uf in uploaded:
+                        if uf is not None:
+                            path = uploads_dir / uf.name
+                            with open(path, "wb") as f:
+                                f.write(uf.getbuffer())
+                    archive_images(config['images_local_dir'], archive_path)
+            else:  # 云端模式
+                uploaded = st.session_state.get('cloud_upload', [])
+                if uploaded and len(uploaded) > 0:
+                    for uf in uploaded:
+                        if uf is not None:
+                            img_bytes = uf.getbuffer()
+                            b64 = base64.b64encode(img_bytes).decode('utf-8')
+                            ext = Path(uf.name).suffix.lower()
+                            mime = "image/png" if ext == '.png' else "image/jpeg"
+                            image_paths.append(f"data:{mime};base64,{b64}")
+                    if not image_paths:
+                        st.error("上传的图片为空，请重新上传。")
+                        st.stop()
+                else:
+                    # 从仓库读取
                     if github_api:
                         dir_contents = github_api.list_dir(config['images_remote_dir'])
                         for item in dir_contents:
                             if item['type'] == 'file' and any(item['name'].lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
                                 url = f"https://raw.githubusercontent.com/{config['owner']}/{config['repo']}/main/{config['images_remote_dir']}{item['name']}"
                                 image_paths.append(url)
-                        if not image_paths:
-                            st.error("没有找到任何图片，请先将图片上传到仓库 images/ 文件夹或使用上方上传功能")
-                            st.stop()
-                    else:
-                        st.error("云端模式需要 GitHub API 凭据，或请切换为本地模式并使用上传功能")
+                    if not image_paths:
+                        st.error("请先上传图片或确保仓库 images/ 文件夹中有图片。")
                         st.stop()
 
+            # 调用 AI
             with st.spinner("正在调用 AI 分析，请稍候..."):
                 try:
                     result_text = analyze_images(api_key=config['token'], model=model_name, image_paths=image_paths, extra_context=extra)
@@ -328,7 +312,7 @@ with tab1:
                     st.error(f"分析调用失败：{e}")
                     st.stop()
 
-            # 解析结果
+            # 解析结果（与之前相同）
             rain_prob, pred_level = "", ""
             lines = result_text.strip().split('\n')
             conclusion_line = None
@@ -351,12 +335,10 @@ with tab1:
                         if len(parts) >= 2: pred_level = parts[-1].strip()
 
             st.subheader("📋 分析结果")
-            st.write("**AI 原始回复：**")
-            st.text(result_text)
+            st.write("**AI 原始回复：**"); st.text(result_text)
 
             correction = compute_correction(st.session_state.records)
-            corrected_level = pred_level
-            bias = 0.0
+            corrected_level = pred_level; bias = 0.0
             if pred_level and pred_level in REVERSE_LEVEL_MAP.values():
                 corrected_level, bias = apply_correction(pred_level, correction)
             st.write(f"**降雨概率：** {rain_prob}")
@@ -368,21 +350,14 @@ with tab1:
                 'id': now.strftime("%Y%m%d%H%M%S"),
                 'timestamp': now.isoformat(),
                 'image_folder': f"archive/{timestamp_str}" if mode == "本地模式 (读取本地文件夹)" else config['images_remote_dir'],
-                'rain_prob': rain_prob,
-                'predicted_level': pred_level,
-                'corrected_level': corrected_level,
-                'analysis': result_text,
-                'raw_response': result_text,
-                'image_count': len(image_paths),
-                'actual_level': None
+                'rain_prob': rain_prob, 'predicted_level': pred_level,
+                'corrected_level': corrected_level, 'analysis': result_text,
+                'raw_response': result_text, 'image_count': len(image_paths), 'actual_level': None
             }
             st.session_state.last_prediction = record
             store.add_record(record)
             st.session_state.records = store.load_records()
-
             st.success("本次分析已自动归档并保存！")
-            st.write(f"存档路径: `{record['image_folder']}`")
-
             st.session_state.analysis_done = True
             st.session_state.archive_path = archive_path if mode == "本地模式 (读取本地文件夹)" else None
             st.session_state.raw_text = result_text
@@ -390,18 +365,15 @@ with tab1:
 
             st.divider()
             st.subheader("📝 实际降雨反馈")
-            actual_level = st.selectbox("实际降雨等级", ["", "无雨", "小雨", "中雨", "大雨", "暴雨"], key="actual_select")
+            actual_level = st.selectbox("实际降雨等级", ["", "无雨","小雨","中雨","大雨","暴雨"], key="actual_select")
             if st.button("保存反馈"):
                 if actual_level:
-                    records = st.session_state.records
-                    for r in records:
+                    for r in st.session_state.records:
                         if r['id'] == record['id']:
-                            r['actual_level'] = actual_level
-                            break
-                    store.save_records(records, f"Update actual level for {record['id']}")
+                            r['actual_level'] = actual_level; break
+                    store.save_records(st.session_state.records, f"Update actual level for {record['id']}")
                     st.session_state.records = store.load_records()
-                    st.success("反馈已保存！")
-                    st.rerun()
+                    st.success("反馈已保存！"); st.rerun()
                 else:
                     st.warning("请选择实际降雨等级")
 
@@ -409,18 +381,15 @@ with tab1:
         if st.session_state.get('analysis_done') and not st.session_state.get('text_saved', False):
             if st.button("💾 保存分析结果"):
                 if mode == "本地模式 (读取本地文件夹)":
-                    archive_path = st.session_state.archive_path
-                    if archive_path and archive_path.exists():
-                        txt_path = archive_path / f"analysis_{st.session_state.record_id}.txt"
-                        with open(txt_path, "w", encoding='utf-8') as f:
+                    ap = st.session_state.archive_path
+                    if ap and ap.exists():
+                        with open(ap / f"analysis_{st.session_state.record_id}.txt", "w", encoding='utf-8') as f:
                             f.write(st.session_state.raw_text)
-                        st.success(f"分析结果已保存至: {txt_path}")
-                        st.session_state.text_saved = True
-                        st.rerun()
+                        st.success(f"已保存"); st.session_state.text_saved = True; st.rerun()
                     else:
-                        st.error("存档文件夹不存在，无法保存文本。")
+                        st.error("存档文件夹不存在。")
                 else:
-                    st.info("云端模式下无法保存文本到本地，建议将结果复制到其他地方。")
+                    st.info("云端模式无法保存本地文件，请手动复制。")
         if st.session_state.get('text_saved'):
             st.info("✅ 分析结果已保存到存档文件夹。")
 
@@ -428,50 +397,33 @@ with tab2:
     st.subheader("📊 历史记录")
     records = st.session_state.records
     if records:
-        for idx, rec in enumerate(records):
-            with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level', '未反馈')}"):
-                st.write(f"**ID:** {rec['id']}")
-                st.write(f"**存档文件夹:** {rec['image_folder']}")
-                st.write(f"**降雨概率:** {rec['rain_prob']}")
-                st.write(f"**预测等级:** {rec['predicted_level']}")
-                st.write(f"**校正后等级:** {rec['corrected_level']}")
-                st.write("**分析文本:**")
-                st.text(rec['analysis'])
+        for rec in records:
+            with st.expander(f"{rec['timestamp']} - 预测: {rec['predicted_level']} / 实际: {rec.get('actual_level','未反馈')}"):
+                st.write(f"**ID:** {rec['id']}"); st.write(f"**存档文件夹:** {rec['image_folder']}")
+                st.write(f"**降雨概率:** {rec['rain_prob']}"); st.write(f"**预测等级:** {rec['predicted_level']}")
+                st.write(f"**校正后等级:** {rec['corrected_level']}"); st.text(rec['analysis'])
                 if rec['image_folder'].startswith("archive/"):
-                    archive_path = PROJECT_ROOT / rec['image_folder']
-                    if archive_path.exists():
-                        st.write("**本次存档图片：**")
+                    ap = PROJECT_ROOT / rec['image_folder']
+                    if ap.exists():
+                        st.write("**存档图片：**")
                         cols = st.columns(3)
                         for i, name in enumerate(REQUIRED_NAMES):
                             for ext in ALLOWED_EXTENSIONS:
-                                img_file = archive_path / f"{name}{ext}"
-                                if img_file.exists():
-                                    with cols[i % 3]:
-                                        st.image(str(img_file), width=150, caption=REQUIRED_DISPLAY.get(name, name))
+                                if (ap / f"{name}{ext}").exists():
+                                    with cols[i%3]: st.image(str(ap / f"{name}{ext}"), width=150, caption=REQUIRED_DISPLAY[name])
                                     break
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("📥 导出为 JSON"):
-                export_path = config['data_file_local']
-                store.export_to_json(export_path)
-                with open(export_path, 'rb') as f:
-                    st.download_button("点击下载", f, file_name="analysis_records.json")
-        with col2:
-            if st.button("🔄 同步到 GitHub"):
-                store.save_records(st.session_state.records, "Manual sync from app")
-                st.success("已同步到 GitHub 仓库！")
+        if st.button("📥 导出为 JSON"):
+            store.export_to_json(config['data_file_local'])
+            with open(config['data_file_local'], 'rb') as f:
+                st.download_button("点击下载", f, "analysis_records.json")
+        if st.button("🔄 同步到 GitHub"):
+            store.save_records(st.session_state.records, "Manual sync"); st.success("已同步")
     else:
-        st.info("暂无历史记录，开始分析并保存反馈后即可看到。")
+        st.info("暂无历史记录。")
 
 with tab3:
     st.subheader("⚖️ 校正管理")
-    correction = compute_correction(st.session_state.records)
-    st.write(f"当前整体偏差校正因子: **{correction.get('overall_bias', 0):.3f}**")
-    st.markdown("""
-    **校正因子计算方式：** 历史所有记录的偏差均值。  
-    偏差 = (预测数值 - 实际数值) / 预测数值（预测非零时）。  
-    校正后等级 = 预测等级数值 × (1 - 偏差因子)。  
-    正值表示 AI 倾向于高估，负值表示低估。
-    """)
-    if st.button("🔄 重新计算校正系数"):
-        st.rerun()
+    corr = compute_correction(st.session_state.records)
+    st.write(f"当前整体偏差校正因子: **{corr.get('overall_bias',0):.3f}**")
+    st.markdown("偏差 = (预测-实际)/预测，校正后等级 = 预测数值×(1-偏差因子)")
+    if st.button("🔄 重新计算"): st.rerun()
