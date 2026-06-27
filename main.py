@@ -37,10 +37,18 @@ st.sidebar.header("⚙️ 设置")
 
 model_name = st.sidebar.text_input("AI 模型", value=config.get('model', 'gpt-4o'))
 
+# --- 运行模式选择（必须保留） ---
+mode = st.sidebar.radio(
+    "运行模式",
+    ["本地模式 (读取本地文件夹)", "云端模式 (读取仓库文件夹)"],
+    index=1 if st.runtime.exists() and st.runtime.is_remote() else 0
+    # 云端部署时默认选择云端模式，本地运行时默认本地模式
+    # 简单起见，始终让用户手动选择
+)
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🔑 GitHub 凭据**")
 
-# 三个输入框
 api_key_input = st.sidebar.text_input(
     "GitHub Token",
     type="password",
@@ -58,12 +66,10 @@ repo_input = st.sidebar.text_input(
     help="例如 image_weather_analysis"
 )
 
-# 用输入框的值覆盖config
 config['token'] = api_key_input
 config['owner'] = owner_input
 config['repo'] = repo_input
 
-# 凭据检查
 missing = []
 if not config['token']:
     missing.append("GitHub Token")
@@ -88,8 +94,6 @@ store = DataStore(config, github_api)
 if 'records' not in st.session_state:
     st.session_state.records = store.load_records()
 else:
-    # 当凭据变化时，重新加载记录（简单方式：每次重新加载）
-    # 为了提升性能，可缓存，但当前简单处理
     st.session_state.records = store.load_records()
 
 # ========== 侧边栏图片名称提示 ==========
@@ -228,9 +232,7 @@ with tab1:
                     st.session_state.batch_mapping = {}
                     st.rerun()
 
-        # 原有 input 文件夹显示
-        mode = st.session_state.get('mode', '本地模式 (读取本地文件夹)')
-
+        # 显示当前 input/ 内容或云端仓库图片
         if mode == "本地模式 (读取本地文件夹)":
             local_dir = config['images_local_dir']
             local_dir.mkdir(parents=True, exist_ok=True)
@@ -253,8 +255,8 @@ with tab1:
                     with open(path, "wb") as f:
                         f.write(uf.getbuffer())
                 st.success(f"已上传 {len(uploaded_files)} 张临时图片")
-        else:
-            st.info("云端模式将从仓库 images/ 文件夹读取图片")
+        else:  # 云端模式
+            st.info("云端模式将从仓库 images/ 文件夹读取图片，或使用下方上传的图片。")
             if github_api:
                 dir_contents = github_api.list_dir(config['images_remote_dir'])
                 image_items = [item for item in dir_contents if item['type'] == 'file' and any(
@@ -265,9 +267,20 @@ with tab1:
                         raw_url = f"https://raw.githubusercontent.com/{config['owner']}/{config['repo']}/main/{config['images_remote_dir']}{item['name']}"
                         st.image(raw_url, width=100, caption=item['name'])
                 else:
-                    st.warning("仓库 images/ 文件夹为空或不存在")
+                    st.warning("仓库 images/ 文件夹为空或不存在，请通过上传方式提供图片。")
             else:
-                st.error("需要配置 GitHub 凭据才能读取仓库图片")
+                st.error("需要配置 GitHub 凭据才能读取仓库图片，但您仍可以通过上传方式提供图片。")
+            # 云端模式也提供上传功能
+            uploaded_files = st.file_uploader("上传图片（当仓库无图片时使用）", type=['png','jpg','jpeg'], accept_multiple_files=True, key="cloud_upload")
+            if uploaded_files:
+                # 保存到临时目录
+                temp_dir = config['images_local_dir'] / "_uploads"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                for uf in uploaded_files:
+                    path = temp_dir / uf.name
+                    with open(path, "wb") as f:
+                        f.write(uf.getbuffer())
+                st.success(f"已上传 {len(uploaded_files)} 张临时图片")
 
         extra = st.text_area("额外说明（可选）", placeholder="例如：分析明天下午3点的降雨情况")
 
@@ -278,34 +291,39 @@ with tab1:
             archive_path = ARCHIVE_DIR / timestamp_str
             image_paths = []
 
-            if mode == "本地模式 (读取本地文件夹)":
-                temp_dir = config['images_local_dir'] / "_uploads"
-                if temp_dir.exists() and any(temp_dir.iterdir()):
-                    image_paths = sorted(temp_dir.glob("*.*"))
+            # 关键修改：优先检查本地临时上传的文件（_uploads）
+            temp_dir = config['images_local_dir'] / "_uploads"
+            if temp_dir.exists() and any(temp_dir.iterdir()):
+                # 使用上传的临时文件
+                image_paths = sorted(temp_dir.glob("*.*"))
+                # 同时归档
+                if mode == "本地模式 (读取本地文件夹)":
                     archive_images(config['images_local_dir'], archive_path)
-                else:
+            else:
+                # 没有上传文件，根据模式决定来源
+                if mode == "本地模式 (读取本地文件夹)":
                     image_dict = find_images_in_dir(config['images_local_dir'])
                     if not image_dict:
-                        st.error("没有找到任何图片，请先将图片放入 input/ 文件夹或使用批量导入")
+                        st.error("没有找到任何图片，请先将图片放入 input/ 文件夹或使用批量导入/上传")
                         st.stop()
                     image_paths = [image_dict[name] for name in REQUIRED_NAMES if name in image_dict]
                     if len(image_paths) < 6:
                         st.error("缺少部分图片（需要6张标准图），请补齐")
                         st.stop()
                     archive_images(config['images_local_dir'], archive_path)
-            else:
-                if github_api:
-                    dir_contents = github_api.list_dir(config['images_remote_dir'])
-                    for item in dir_contents:
-                        if item['type'] == 'file' and any(item['name'].lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                            url = f"https://raw.githubusercontent.com/{config['owner']}/{config['repo']}/main/{config['images_remote_dir']}{item['name']}"
-                            image_paths.append(url)
-                    if not image_paths:
-                        st.error("云端仓库中没有找到图片")
+                else:  # 云端模式
+                    if github_api:
+                        dir_contents = github_api.list_dir(config['images_remote_dir'])
+                        for item in dir_contents:
+                            if item['type'] == 'file' and any(item['name'].lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                                url = f"https://raw.githubusercontent.com/{config['owner']}/{config['repo']}/main/{config['images_remote_dir']}{item['name']}"
+                                image_paths.append(url)
+                        if not image_paths:
+                            st.error("没有找到任何图片，请先将图片上传到仓库 images/ 文件夹或使用上方上传功能")
+                            st.stop()
+                    else:
+                        st.error("云端模式需要 GitHub API 凭据，或请切换为本地模式并使用上传功能")
                         st.stop()
-                else:
-                    st.error("云端模式需要 GitHub API 凭据")
-                    st.stop()
 
             with st.spinner("正在调用 AI 分析，请稍候..."):
                 try:
